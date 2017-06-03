@@ -65,6 +65,9 @@
     <ClInclude Include="MessageQueue.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="CyAPI.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="CCTAPI.rc">
@@ -72,8 +75,7 @@
     </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
-    <Library Include="CyUsb.lib">
-      <Filter>Source Files</Filter>
-    </Library>
+    <Library Include="CyAPI.lib" />
+    <Library Include="CyUsb.lib" />
   </ItemGroup>
 </Project>

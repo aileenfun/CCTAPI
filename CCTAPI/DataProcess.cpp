@@ -19,13 +19,14 @@ static char THIS_FILE[]=__FILE__;
 #define new DEBUG_NEW
 #endif
 
-CDataProcess::CDataProcess(void)
+CDataProcess::CDataProcess()
 {
 	m_hThread=NULL;
 	m_pPutMsg=NULL;
 	m_pGetMsg=NULL;
+	
 	m_hDC=0;
-
+	/*
 	memset(&m_BitmapInfo,0,sizeof(BITMAPINFO));
 	m_BitmapInfo.bmiHeader.biBitCount=24;
 	m_BitmapInfo.bmiHeader.biClrImportant=0;
@@ -37,7 +38,7 @@ CDataProcess::CDataProcess(void)
 
 	m_BitmapInfo.bmiHeader.biXPelsPerMeter=0;
 	m_BitmapInfo.bmiHeader.biYPelsPerMeter=0;
-
+	*/
 	m_bEnd=FALSE;
 	m_lFrameCount=0;
 
@@ -45,30 +46,43 @@ CDataProcess::CDataProcess(void)
 
 	m_ChangeType=Normal_Change;
 	m_bCreateBmp=FALSE;
+	//m_temp=NULL;
 }
 
 CDataProcess::~CDataProcess(void)
 {
-		delete []m_Out;
-		delete []m_In;
 }
 
-int CDataProcess::Open(int height,int width,LPMV_CALLBACK2 CallBackFunc)
+int CDataProcess::Open(int height,int width,LPVOID* lpuser,LPMV_CALLBACK2 CallBackFunc)
 {
 	g_height=height;
 	g_width=width;
 	g_width_L=width;
 	h_callback=CallBackFunc;
 	CGuard guard(m_Mutex);
-	m_pPutMsg = new UD_MESSAGE();
-	m_pPutMsg->pData = new char[g_height*g_width_L];
-	m_pGetMsg = new UD_MESSAGE();
-	m_pGetMsg->pData = new char[g_height*g_width_L];
-	m_MsgQueue.Open(5, g_height*g_width_L);
-	m_In = new byte[g_height*g_width_L];
-	m_Out = new tagRGB[g_height*g_width];
-	memset(m_In,0,sizeof(m_In));
-	memset(m_Out,0,sizeof(m_Out));
+	lpcb=lpuser;
+	//m_pPutMsg = new UD_MESSAGE();
+	//m_pPutMsg->pData = new char[g_height*g_width_L];
+	//m_pGetMsg = new UD_MESSAGE();
+	//m_pGetMsg->pData = new char[g_height*g_width_L];
+	//m_MsgQueue.Open(5, g_height*g_width_L);
+	//m_In = new byte[g_height*g_width_L];
+	//m_Out = new tagRGB[g_height*g_width];
+//	memset(m_In,0,sizeof(m_In));
+	//memset(m_Out,0,sizeof(m_Out));
+
+	m_u_pGetMsg.reset(new UD_MESSAGE);
+	m_u_pPutMsg.reset(new UD_MESSAGE);
+	//m_pPutMsg = new UD_MESSAGE();
+	//m_pPutMsg->pData = new char[g_height*g_width_L];
+	//m_pPutMsg->pAny=new DFrameStruct();
+	//m_pGetMsg = new UD_MESSAGE();
+	//m_pGetMsg->pData = new char[g_height*g_width_L];
+	m_MsgQueue.Open(3, g_height*g_width_L);
+	//m_Out = new tagRGB[g_height*g_width];
+	//memset(m_In,0,sizeof(m_In));
+	//memset(m_Out,0,sizeof(m_Out));
+
 	m_bEnd=FALSE;
 	m_hThread = (HANDLE)_beginthreadex(NULL,0,ThreadProcess,this,0,NULL);
 
@@ -78,37 +92,46 @@ int CDataProcess::Close()
 {
 	CGuard guard(m_Mutex);
 	m_bEnd=TRUE;
+	//if(m_temp!=NULL)
+	//delete m_temp;
 	return 0;
 }
 
-int CDataProcess::Input( VOID * pData,int dwSizes )
+int CDataProcess::Input( std::unique_ptr<DFrameStruct>& upData,int dwSizes )
 {
 	CGuard guard(m_Mutex);
+	m_u_pPutMsg.reset(new UD_MESSAGE);
+	m_pPutMsg=m_u_pPutMsg.get();
 	if(m_bEnd)
 		return -1;
 	m_pPutMsg->iDataSize = dwSizes;
-	memcpy(m_pPutMsg->pData,pData,m_pPutMsg->iDataSize);
+	m_pPutMsg->pAny=std::move(upData);
 	m_pPutMsg->iType = MSG_DATA_HANDALE;
 	++m_lFrameCount;
-	return PutMessage(m_pPutMsg);
+	return PutMessage(m_u_pPutMsg);
 }
 
 void CDataProcess::ThreadProcessFunction()
 {
 	int iRet=0;
 	int endflag = 1;
+
 	while (endflag!=0)
 	{
+		m_u_pGetMsg.reset(new UD_MESSAGE);
 		if(m_bEnd)
 		{
 			CloseMsgQueue();
 			break;
 		}
-		if (m_MsgQueue.GetMessage(m_pGetMsg)!=0)
+		m_u_pGetMsg=std::move(m_MsgQueue.GetMessage(m_u_pGetMsg));
+		m_pGetMsg=m_u_pGetMsg.get();
+		if(m_u_pGetMsg==nullptr)
 		{
 			Sleep(1);
 			continue;
 		}
+
 		switch (m_pGetMsg->iType)
 		{
 		case MSG_CMD_DESTORY:
@@ -116,13 +139,14 @@ void CDataProcess::ThreadProcessFunction()
 			endflag=0;
 			break;
 		case MSG_DATA_HANDALE:
-			memcpy(m_In,m_pGetMsg->pData,m_pGetMsg->iDataSize);
-			ProcessData();
-			memset(m_In,0,sizeof(m_In));
-			memset(m_Out,0,sizeof(m_Out));
+			uimData=std::move(m_pGetMsg->pAny);
+			imData=uimData.get();
+			ProcessIMUData(imData);
+			OutPutWrapper(h_callback,lpcb);
 			break;
 		default:
 			break;
+			
 		}
 	}
 }
@@ -135,62 +159,120 @@ unsigned int __stdcall CDataProcess::ThreadProcess( void *handle )
 }
 int CDataProcess::OutPutWrapper(LPMV_CALLBACK2 CallBackFunc,LPVOID lpUser)
 {
-	CallBackFunc(m_In,this);
+	CallBackFunc(imData,lpcb);
 	return 0;
 }
+int CDataProcess::bytesToIMU(byte* bufbyte,int len,VOID* output,int outsel=0)//unsigned int* uiout,float *fout,int outsel=0)
+{
+	//float output;
+	union
+	{
+		float fvalue;
+		short uint16;
+		unsigned int time;
+		byte b[4];
+	}utemp;
 
+	for(int n=0;n<4;n++)
+	{
+		utemp.b[n]=0;
+	}
 
-
-int CDataProcess::ProcessData()
+	for(int i=0;i<len;i++)
+	{
+		byte tb=*(bufbyte+len-i-1);
+		//byte tb=*(bufbyte+i);
+		utemp.b[i]=tb;
+	}
+	/**((byte*)(&output) + 3) = b0;
+	*((byte*)(&output) + 2) = b1;
+	*((byte*)(&output) + 1) = b2;
+	*((byte*)(&output) + 0) = b3;*/
+	if(len==2)
+		//*(float*)output=utemp.fvalue;
+		*(short*) output=utemp.uint16;
+	if(len==4)
+		*(unsigned int*)output=utemp.time;
+	return len;
+}
+int CDataProcess::ProcessIMUData(DFrameStruct *dFrame)
+{
+	int i=0;
+	VOID *tempNum=new VOID*;
+	IMUDataStruct *m_IMU=dFrame->IMUData.get();
+	byte* m_IMUBuffer=dFrame->IMUDataBuffer.get();
+	for(int j=0;j<dFrame->IMUSamplesCnt;j++)
+	{
+		//time Stamp
+		i+=bytesToIMU(m_IMUBuffer+i,4,tempNum);
+		(m_IMU+j)->timeStamp=*(unsigned int*)tempNum;
+		//accel
+		i+=fillAxisIMU(((IMUDataStruct*)(m_IMU+j))->accelData,m_IMUBuffer+i);
+		//temperature
+		i+=bytesToIMU(m_IMUBuffer+i,2,tempNum);
+		(m_IMU+j)->temperData=*(short*)tempNum;
+		//gyro
+		i+=fillAxisIMU(((IMUDataStruct*)(m_IMU+j))->gyroData,m_IMUBuffer+i);
+		
+	}
+	delete tempNum;
+	return 0;
+}
+int CDataProcess::fillAxisIMU(short *imu,byte* buffer)
+{
+	VOID* tempNUM=new VOID*;
+	int k=0;
+	for(int j=0;j<3;j++,k+=2)
+	{
+		bytesToIMU(buffer+k,2,tempNUM,0);
+		*(imu+j)=*(short*)tempNUM;
+	}
+	delete tempNUM;
+	
+	return k;
+}
+int CDataProcess::ProcessData(byte* m_In,int w,int h)
 {
 	if(!m_bEnd)
 	{
-		/*cv::Mat frame(g_height,g_width,CV_8UC1,m_In);
-		cv::Mat colored(g_height,g_width,CV_8UC3);
-		cv::applyColorMap(frame,colored,cv::COLORMAP_JET);
-		cv::imshow("disp",frame);
-		cv::imshow("color",colored);
-		cv::waitKey(10);*/
-		OutPutWrapper(h_callback,this);
-		//ByteToRGB(m_In,m_Out);
-
-		//switch(m_ProcType)
-		//{
-		//case Xmirror_Proc:
-		//	DoXmirrorProc();
-		//	break;
-		//case Ymirror_Proc:
-		//	DoYmirrorProc();
-		//	break;
-		//case XYmirror_Proc:
-		//	DoXmirrorProc();
-		//	DoYmirrorProc();
-		//	break;
-		//case Normal_Proc:
-		//default:
-		//	break;
-		//}
-		//CreateBmpFile();
-		//m_BitmapInfo.bmiHeader.biSizeImage=g_width*g_height*3;//图片实际数据字节数
-		//m_BitmapInfo.bmiHeader.biWidth=g_width;
-		//m_BitmapInfo.bmiHeader.biHeight= g_height;
-		//StretchDIBits(m_pDisplay->GetMemDC()->m_hDC,0,0,g_width,g_height,0,0,g_width,g_height,m_Out,&m_BitmapInfo,DIB_RGB_COLORS,SRCCOPY);
-		////StretchDIBits(m_pDisplay->GetMemDC()->m_hDC,0,0,1280,720,0,0,g_height,g_width,m_Out,&m_BitmapInfo,DIB_RGB_COLORS,SRCCOPY);
-		//m_pDisplay->Display();
-		memset(m_In,0,sizeof(m_In));
-		memset(m_Out,0,sizeof(m_Out));
+		m_In = new byte[h*w];
+		byte* m_processed=new byte[w*h];
+		byte* m_temp=new byte[w*h];
+		switch(m_ProcType)
+		{
+		case Xmirror_Proc:
+			DoXmirrorProc(m_In,m_processed,h,w);
+			break;
+		case Ymirror_Proc:
+			DoYmirrorProc(m_In,m_processed,h,w);
+			break;
+		case XYmirror_Proc:
+			
+			DoXmirrorProc(m_In,m_temp,h,w);
+			DoYmirrorProc(m_temp,m_processed,h,w);
+			
+			break;
+		case Normal_Proc:
+		default:
+			DoNormal(m_In,m_processed,h,w);
+			break;
+		}
+		delete m_processed;
+		delete m_temp;
+		delete m_In;
 	}
 	return 0;
 }
 
-int CDataProcess::PutMessage( UD_MESSAGE *msg )
+int CDataProcess::PutMessage( std::unique_ptr<UD_MESSAGE> &umsg )
 {
+
 	int iRet=0;
 	while(1)
 	{
 		if(m_bEnd)
 			break;
-		iRet = m_MsgQueue.PutMessage(msg);
+		iRet = m_MsgQueue.PutMessage(umsg);
 		if (iRet==0)
 			break;
 		else if (iRet==-1)
@@ -202,6 +284,7 @@ int CDataProcess::PutMessage( UD_MESSAGE *msg )
 			iRet=-1;
 			break;
 		}
+		Sleep(1);
 	}	
 	return iRet;
 }
@@ -223,11 +306,9 @@ int CDataProcess::ByteToRGB( byte *pIn ,tagRGB* pOut )
 			s565Rgb.R=pIn[i * g_width_L + j]>>3;//R5
 			s565Rgb.G=((pIn[i * g_width_L + j]&0x7)<<3)+((pIn[i * g_width_L + j+1]&0xE0)>>5);//G6
 			s565Rgb.B=pIn[i * g_width_L + j+1]&0x1F;//B5
-			
 			sTempRgb.R=s565Rgb.R*x5;
 			sTempRgb.G=s565Rgb.G*x6;
 			sTempRgb.B=s565Rgb.B*x5;
-			
 			RgbChangeProc(pOut[i * g_width_L + j/2],sTempRgb);
 		}
 	}
@@ -280,22 +361,22 @@ void CDataProcess::CloseMsgQueue()
 {
 	if(m_pGetMsg!=NULL)
 	{
-		if(m_pGetMsg->pData!=NULL)
-		{
-			delete[] m_pGetMsg->pData;
-			m_pGetMsg->pData=NULL;
-		}
-		delete m_pGetMsg;
+		//if(m_pGetMsg->pData!=NULL)
+		//{
+		//	delete[] m_pGetMsg->pData;
+		//	m_pGetMsg->pData=NULL;
+		//}
+		//delete m_pGetMsg;
 		m_pGetMsg=NULL;
 	}
 	if(m_pPutMsg!=NULL)
 	{
-		if(m_pPutMsg->pData!=NULL)
-		{
-			delete[] m_pPutMsg->pData;
-			m_pPutMsg->pData=NULL;
-		}
-		delete m_pPutMsg;
+		//if(m_pPutMsg->pData!=NULL)
+		//{
+		//	delete[] m_pPutMsg->pData;
+		//	m_pPutMsg->pData=NULL;
+		//}
+		//delete m_pPutMsg;
 		m_pPutMsg=NULL;
 	}
 	m_MsgQueue.Close();
@@ -309,32 +390,62 @@ int CDataProcess::GetFrameCount( int& fCount )
 	return 0;
 }
 
-void CDataProcess::DoYmirrorProc()
+void CDataProcess::DoYmirrorProc(byte* pIn,byte * pOut,int h,int w)
 {
-	tagRGB TempRgb;
-	for(int i=0;i<g_height;++i)
+	volatile byte tempbuf=0;
+	for(int i=0;i<h;i++)
 	{
-		for(int j=0;j<g_width/2;++j )
+		for (int j=0;j<w;j++)
 		{
-			memcpy(&TempRgb,&m_Out[i*g_width + j],sizeof(tagRGB));
-			memcpy(&m_Out[i*g_width + j],&m_Out[i*g_width + g_width-1-j],sizeof(tagRGB));
-			memcpy(&m_Out[i*g_width + g_width-1-j],&TempRgb,sizeof(tagRGB));
+			int idx=i*w+w-1-j;
+			pOut[i*w+j]=pIn[idx];
 		}
 	}
 }
-
-void CDataProcess::DoXmirrorProc()
+//void CDataProcess::DoYmirrorProc()
+//{
+//	tagRGB TempRgb;
+//	for(int i=0;i<g_height;++i)
+//	{
+//		for(int j=0;j<g_width/2;++j )
+//		{
+//			memcpy(&TempRgb,&m_Out[i*g_width + j],sizeof(tagRGB));
+//			memcpy(&m_Out[i*g_width + j],&m_Out[i*g_width + g_width-1-j],sizeof(tagRGB));
+//			memcpy(&m_Out[i*g_width + g_width-1-j],&TempRgb,sizeof(tagRGB));
+//		}
+//	}
+//}
+void CDataProcess::DoNormal(byte* pIn,byte* pOut,int h,int w)
 {
-	tagRGB* TempRgbBuf = new tagRGB[g_width];//如果用到，考虑指针地址循环使用
-	for(int i=0;i<g_height/2;++i)
-	{
-		memcpy(TempRgbBuf,&m_Out[i*g_width],sizeof(tagRGB)*g_width);
-		memcpy(&m_Out[i*g_width],&m_Out[(g_height-1-i)*g_width],sizeof(tagRGB)*g_width);
-		memcpy(&m_Out[(g_height-1-i)*g_width],TempRgbBuf,sizeof(tagRGB)*g_width);
-		memset(TempRgbBuf,0,sizeof(TempRgbBuf));
-	}
-	delete []TempRgbBuf;
+	memcpy(pOut,pIn,w*h);
 }
+void CDataProcess::DoXmirrorProc(byte* pIn,byte *pOut,int h,int w)
+{
+	//byte *tempbuf=new byte[w];
+	
+	for(int i=0;i<h;i++)
+	{
+		/*memcpy(tempbuf,&pIn[i*w],w);
+		memcpy(&pIn[i*w],&pIn[(h-1-i)*w],w);
+		memcpy(&pIn[(h-i-1)*w],tempbuf,w);
+		memset(tempbuf,0,w);
+		*/
+		memcpy(&pOut[i*w],&pIn[(h-1-i)*w],w);
+	}
+	//delete []tempbuf;
+}
+//void CDataProcess::DoXmirrorProc()
+//{
+//	tagRGB* TempRgbBuf = new tagRGB[g_width];//如果用到，考虑指针地址循环使用
+//	for(int i=0;i<g_height/2;++i)
+//	{
+//		memcpy(TempRgbBuf,&m_Out[i*g_width],sizeof(tagRGB)*g_width);
+//		memcpy(&m_Out[i*g_width],&m_Out[(g_height-1-i)*g_width],sizeof(tagRGB)*g_width);
+//		memcpy(&m_Out[(g_height-1-i)*g_width],TempRgbBuf,sizeof(tagRGB)*g_width);
+//		memset(TempRgbBuf,0,sizeof(TempRgbBuf));
+//	}
+//	delete []TempRgbBuf;
+//}
 
 int CDataProcess::SetProcType( DataProcessType type )
 {

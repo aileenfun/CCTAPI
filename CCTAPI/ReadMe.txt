@@ -1,6 +1,6 @@
-========================================================================
+==
     MICROSOFT FOUNDATION CLASS LIBRARY : CCTAPI Project Overview
-========================================================================
+==
 
 
 AppWizard has created this CCTAPI DLL for you.  This DLL not only

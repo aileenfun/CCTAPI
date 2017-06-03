@@ -43,3 +43,5 @@ CYUSB_API int ReadData(char* pbuff,LONG &lBytes);
 CYUSB_API int WriteData(char* pbuff,LONG &lBytes);
 CYUSB_API int SendOrder(PUSB_ORDER pOrder);
 CYUSB_API int Reset();
+CYUSB_API int DeviceReset();
+//CYUSB_API int getDeviceNum();
